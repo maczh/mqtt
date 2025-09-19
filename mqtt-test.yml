@@ -1,0 +1,14 @@
+go:
+  data:
+    mqtt:
+      broker: tcp://172.30.226.52:1883
+      clientId: go-mqtt-client
+      username:
+      password:
+      subscribe:
+        - topic: /test/topic
+          qos: 0
+          handlerFuncName: testHandler
+        - topic: /test/topic2
+          qos: 0
+          handlerFuncName: testHandler2
