@@ -77,8 +77,21 @@ func (m *mqtt) Check() error {
 	return nil
 }
 
+// safeHandler 包装MessageHandler，捕获panic
+func safeHandler(handler paho.MessageHandler) paho.MessageHandler {
+	return func(client paho.Client, msg paho.Message) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("mqtt message handler panic: " + msg.Topic() + ", error: " + r.(string))
+			}
+		}()
+		handler(client, msg)
+	}
+}
+
 func (m *mqtt) Subscribe(topic string, qos byte, handlerFunc paho.MessageHandler) error {
-	token := m.client.Subscribe(topic, qos, handlerFunc)
+	// 使用安全包装的handler
+	token := m.client.Subscribe(topic, qos, safeHandler(handlerFunc))
 	if token.Error() != nil {
 		logger.Error("subscribe topic failed, topic: " + topic + ", err: " + token.Error().Error())
 		return token.Error()
@@ -88,7 +101,8 @@ func (m *mqtt) Subscribe(topic string, qos byte, handlerFunc paho.MessageHandler
 }
 
 func (m *mqtt) SubscribeMultiple(filters map[string]byte, callback paho.MessageHandler) error {
-	token := m.client.SubscribeMultiple(filters, callback)
+	// 使用安全包装的handler
+	token := m.client.SubscribeMultiple(filters, safeHandler(callback))
 	if token.Error() != nil {
 		logger.Error("subscribe Topics failed, err: " + token.Error().Error())
 		return token.Error()
