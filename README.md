@@ -23,28 +23,41 @@ go:
       mqtt: mqtt
 ```
 
-### 配置中心的mqtt-test.yml配置
+### 配置中心的mqtt-test.yml配置,单连接
 ```yaml
 go:
   data:
     mqtt:
+      multi: false
       broker: tcp://172.30.226.52:1883
       clientId: go-mqtt-client
       username:
       password:
-      subscribe:
-        - topic: /test/topic
-          qos: 0
-          handlerFuncName: testHandler
-        - topic: /test/topic2
-          qos: 0
-          handlerFuncName: testHandler2
 
 ```
+### 配置中心的mqtt-test.yml配置,多连接
+```yaml
+go:
+  data:
+    mqtt:
+      multi: true
+      conns: broker1, broker2
+      broker1:
+        broker: tcp://172.30.226.52:1883
+        clientId: go-mqtt-client1
+        username:
+        password:
+      broker2:
+        broker: tcp://172.30.226.53:1883
+        clientId: go-mqtt-client2
+        username:
+        password:
+```
+
 
 ## 发送消息
 ```go
-    mqtt.MQTT.Publish("mytopic", 0, false, msg)
+    mqtt.MQTT.Publish("","mytopic", 0, false, msg)
 ```
 
 ## 侦听主题消息并处理
@@ -66,5 +79,10 @@ var testHandler paho.MessageHandler = func(client paho.Client, msg paho.Message)
 - 在main.go中添加侦听代码
 ```go
 	//侦听MQTT消息，说明，主题名后缀的#为通配符，代表可以侦听同一前缀的所有主题消息
-    mqtt.MQTT.Subscribe("test/topic/#", 0, testHandler)
+    mqtt.MQTT.Subscribe("","test/topic/#", 0, testHandler)
 ```
+
+## 版本升级说明
+- v1.0.0 2025-09-25 初始版本
+- v1.0.1 2026-02-04 修复订阅协程崩溃问题
+- v1.1.0 2026-04-01 支持多连接

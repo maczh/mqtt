@@ -1,6 +1,9 @@
 package mqtt
 
 import (
+	"errors"
+	"strings"
+
 	paho "github.com/eclipse/paho.mqtt.golang"
 	"github.com/knadh/koanf"
 	"github.com/knadh/koanf/parsers/yaml"
@@ -9,14 +12,21 @@ import (
 )
 
 type mqtt struct {
-	configData []byte
-	conf       *koanf.Koanf
-	client     paho.Client
-	Topics     []SubTopics
-	broker     string
-	clientId   string
-	username   string
-	password   string
+	configData  []byte
+	conf        *koanf.Koanf
+	client      paho.Client
+	Topics      []SubTopics
+	multi       bool
+	tags        []string
+	connections map[string]*connection
+}
+
+type connection struct {
+	Client   paho.Client
+	Broker   string
+	ClientId string
+	Username string
+	Password string
 }
 
 type SubTopics struct {
@@ -35,46 +45,124 @@ func (m *mqtt) Init(configData []byte) {
 		logger.Error("load config failed, err: " + err.Error())
 		return
 	}
-	m.broker = m.conf.String("go.data.mqtt.broker")
-	m.clientId = m.conf.String("go.data.mqtt.clientId")
-	m.username = m.conf.String("go.data.mqtt.username")
-	m.password = m.conf.String("go.data.mqtt.password")
-	topics := m.conf.Slices("go.data.mqtt.subscribe")
-	for _, topic := range topics {
-		m.Topics = append(m.Topics, SubTopics{
-			Topic:           topic.String("topic"),
-			Qos:             byte(topic.Int("qos")),
-			HandlerFuncName: topic.String("handlerFuncName"),
-		})
+	if m.connections == nil || len(m.connections) == 0 {
+		m.connections = make(map[string]*connection)
+		m.tags = make([]string, 0)
+		m.multi = m.conf.Bool("go.data.mqtt.multi")
+		if m.multi {
+			tags := strings.Split(m.conf.String("go.data.mqtt.conns"), ",")
+			m.tags = tags
+			for _, tag := range tags {
+				conn := &connection{
+					Broker:   m.conf.String("go.data.mqtt." + tag + ".broker"),
+					ClientId: m.conf.String("go.data.mqtt." + tag + ".clientId"),
+					Username: m.conf.String("go.data.mqtt." + tag + ".username"),
+					Password: m.conf.String("go.data.mqtt." + tag + ".password"),
+				}
+				conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+				if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
+					logger.Error("connect mqtt broker failed, tag: " + tag + ", err: " + token.Error().Error())
+					continue
+				}
+				m.connections[tag] = conn
+				logger.Info("connect mqtt broker success, tag: " + tag + ", broker: " + conn.Broker + ", clientId: " + conn.ClientId)
+			}
+		} else {
+			conn := &connection{
+				Broker:   m.conf.String("go.data.mqtt.broker"),
+				ClientId: m.conf.String("go.data.mqtt.clientId"),
+				Username: m.conf.String("go.data.mqtt.username"),
+				Password: m.conf.String("go.data.mqtt.password"),
+			}
+			conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
+				logger.Error("connect mqtt broker failed, err: " + token.Error().Error())
+				return
+			}
+			m.connections["0"] = conn
+			logger.Info("connect mqtt broker success, broker: " + conn.Broker + ", clientId: " + conn.ClientId)
+		}
 	}
-	client := paho.NewClient(paho.NewClientOptions().AddBroker(m.broker).SetClientID(m.clientId).SetUsername(m.username).SetPassword(m.password))
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		logger.Error("connect mqtt broker failed, err: " + token.Error().Error())
-		return
+}
+
+func (m *mqtt) GetConnection(tag ...string) (*connection, error) {
+	if !m.multi {
+		if m.connections["0"].Client.IsConnected() {
+			return m.connections["0"], nil
+		} else {
+			conn := m.connections["0"]
+			conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
+				logger.Error("reconnect mqtt broker failed, err: " + token.Error().Error())
+				return nil, token.Error()
+			}
+			m.connections["0"] = conn
+			logger.Info("reconnect mqtt broker success, broker: " + conn.Broker + ", clientId: " + conn.ClientId)
+			return conn, nil
+		}
+	}
+	if len(tag) == 0 || tag[0] == "" {
+		return nil, errors.New("tag is required for multi connections")
+	}
+	if _, ok := m.connections[tag[0]]; !ok {
+		return nil, errors.New("connection not found for tag: " + tag[0])
+	}
+	if m.connections[tag[0]].Client.IsConnected() {
+		return m.connections[tag[0]], nil
+	} else {
+		conn := m.connections[tag[0]]
+		conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+		if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
+			logger.Error("reconnect mqtt broker failed, tag: " + tag[0] + ", err: " + token.Error().Error())
+			return nil, token.Error()
+		}
+		m.connections[tag[0]] = conn
+		return conn, nil
 	}
 
-	m.client = client
-
-	logger.Info("connect mqtt broker success, broker: " + m.broker + ", clientId: " + m.clientId)
 }
 
 func (m *mqtt) Close() {
-	if m.client.IsConnected() {
-		m.client.Disconnect(0)
-		logger.Info("disconnect mqtt broker success, broker: " + m.broker + ", clientId: " + m.clientId)
+	if !m.multi {
+		m.connections["0"].Client.Disconnect(0)
+		logger.Info("disconnect mqtt broker success, broker: " + m.connections["0"].Broker + ", clientId: " + m.connections["0"].ClientId)
+		delete(m.connections, "0")
+	} else {
+		for tag, _ := range m.connections {
+			m.connections[tag].Client.Disconnect(0)
+			logger.Info("disconnect mqtt broker success, tag: " + tag + ", broker: " + m.connections[tag].Broker + ", clientId: " + m.connections[tag].ClientId)
+			delete(m.connections, tag)
+		}
 	}
 }
 
 func (m *mqtt) Check() error {
-	if !m.client.IsConnected() {
-		logger.Error("mqtt client not connected")
-		m.client = paho.NewClient(paho.NewClientOptions().AddBroker(m.broker).SetClientID(m.clientId).SetUsername(m.username).SetPassword(m.password))
-		if token := m.client.Connect(); token.Wait() && token.Error() != nil {
-			logger.Error("reconnect mqtt broker failed, err: " + token.Error().Error())
-			return token.Error()
+	var err error
+	if m.multi {
+		for tag, conn := range m.connections {
+			if !conn.Client.IsConnected() {
+				logger.Error("mqtt client not connected, tag: " + tag)
+				conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+				if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
+					logger.Error("reconnect mqtt broker failed, tag: " + tag + ", err: " + token.Error().Error())
+					err = token.Error()
+				}
+				m.connections[tag] = conn
+			}
+		}
+	} else {
+		conn := m.connections["0"]
+		if !conn.Client.IsConnected() {
+			logger.Error("mqtt client not connected")
+			conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
+				logger.Error("reconnect mqtt broker failed, err: " + token.Error().Error())
+				err = token.Error()
+			}
+			m.connections["0"] = conn
 		}
 	}
-	return nil
+	return err
 }
 
 // safeHandler 包装MessageHandler，捕获panic
@@ -89,9 +177,13 @@ func safeHandler(handler paho.MessageHandler) paho.MessageHandler {
 	}
 }
 
-func (m *mqtt) Subscribe(topic string, qos byte, handlerFunc paho.MessageHandler) error {
+func (m *mqtt) Subscribe(tag, topic string, qos byte, handlerFunc paho.MessageHandler) error {
+	conn, err := m.GetConnection(tag)
+	if err != nil {
+		return err
+	}
 	// 使用安全包装的handler
-	token := m.client.Subscribe(topic, qos, safeHandler(handlerFunc))
+	token := conn.Client.Subscribe(topic, qos, safeHandler(handlerFunc))
 	if token.Error() != nil {
 		logger.Error("subscribe topic failed, topic: " + topic + ", err: " + token.Error().Error())
 		return token.Error()
@@ -100,9 +192,13 @@ func (m *mqtt) Subscribe(topic string, qos byte, handlerFunc paho.MessageHandler
 	return nil
 }
 
-func (m *mqtt) SubscribeMultiple(filters map[string]byte, callback paho.MessageHandler) error {
+func (m *mqtt) SubscribeMultiple(tag string, filters map[string]byte, callback paho.MessageHandler) error {
+	conn, err := m.GetConnection(tag)
+	if err != nil {
+		return err
+	}
 	// 使用安全包装的handler
-	token := m.client.SubscribeMultiple(filters, safeHandler(callback))
+	token := conn.Client.SubscribeMultiple(filters, safeHandler(callback))
 	if token.Error() != nil {
 		logger.Error("subscribe Topics failed, err: " + token.Error().Error())
 		return token.Error()
@@ -111,15 +207,23 @@ func (m *mqtt) SubscribeMultiple(filters map[string]byte, callback paho.MessageH
 	return nil
 }
 
-func (m *mqtt) Publish(topic string, qos byte, retained bool, payload interface{}) error {
-	if token := m.client.Publish(topic, qos, retained, payload); token.Wait() && token.Error() != nil {
+func (m *mqtt) Publish(tag, topic string, qos byte, retained bool, payload interface{}) error {
+	conn, err := m.GetConnection(tag)
+	if err != nil {
+		return err
+	}
+	if token := conn.Client.Publish(topic, qos, retained, payload); token.Wait() && token.Error() != nil {
 		logger.Error("publish topic failed, topic: " + topic + ", err: " + token.Error().Error())
 		return token.Error()
 	}
 	return nil
 }
-func (m *mqtt) UnSubscribe(topics ...string) error {
-	if token := m.client.Unsubscribe(topics...); token.Wait() && token.Error() != nil {
+func (m *mqtt) UnSubscribe(tag string, topics ...string) error {
+	conn, err := m.GetConnection(tag)
+	if err != nil {
+		return err
+	}
+	if token := conn.Client.Unsubscribe(topics...); token.Wait() && token.Error() != nil {
 		logger.Error("unsubscribe Topics failed, err: " + token.Error().Error())
 		return token.Error()
 	}
