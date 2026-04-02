@@ -27,6 +27,7 @@ type connection struct {
 	ClientId string
 	Username string
 	Password string
+	Topics   []string
 }
 
 type SubTopics struct {
@@ -58,6 +59,7 @@ func (m *mqtt) Init(configData []byte) {
 					ClientId: m.conf.String("go.data.mqtt." + tag + ".clientId"),
 					Username: m.conf.String("go.data.mqtt." + tag + ".username"),
 					Password: m.conf.String("go.data.mqtt." + tag + ".password"),
+					Topics:   make([]string, 0),
 				}
 				conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
 				if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
@@ -73,6 +75,7 @@ func (m *mqtt) Init(configData []byte) {
 				ClientId: m.conf.String("go.data.mqtt.clientId"),
 				Username: m.conf.String("go.data.mqtt.username"),
 				Password: m.conf.String("go.data.mqtt.password"),
+				Topics:   make([]string, 0),
 			}
 			conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
 			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
@@ -124,11 +127,17 @@ func (m *mqtt) GetConnection(tag ...string) (*connection, error) {
 
 func (m *mqtt) Close() {
 	if !m.multi {
+		if len(m.connections["0"].Topics) > 0 {
+			m.connections["0"].Client.Unsubscribe(m.connections["0"].Topics...)
+		}
 		m.connections["0"].Client.Disconnect(0)
 		logger.Info("disconnect mqtt broker success, broker: " + m.connections["0"].Broker + ", clientId: " + m.connections["0"].ClientId)
 		delete(m.connections, "0")
 	} else {
 		for tag, _ := range m.connections {
+			if len(m.connections[tag].Topics) > 0 {
+				m.connections[tag].Client.Unsubscribe(m.connections[tag].Topics...)
+			}
 			m.connections[tag].Client.Disconnect(0)
 			logger.Info("disconnect mqtt broker success, tag: " + tag + ", broker: " + m.connections[tag].Broker + ", clientId: " + m.connections[tag].ClientId)
 			delete(m.connections, tag)
@@ -189,6 +198,7 @@ func (m *mqtt) Subscribe(tag, topic string, qos byte, handlerFunc paho.MessageHa
 		return token.Error()
 	}
 	token.Wait()
+	m.connections[tag].Topics = append(m.connections[tag].Topics, topic)
 	return nil
 }
 
@@ -204,6 +214,9 @@ func (m *mqtt) SubscribeMultiple(tag string, filters map[string]byte, callback p
 		return token.Error()
 	}
 	token.Wait()
+	for topic, _ := range filters {
+		m.connections[tag].Topics = append(m.connections[tag].Topics, topic)
+	}
 	return nil
 }
 
