@@ -77,7 +77,7 @@ func (m *mqtt) Init(configData []byte) {
 				Password: m.conf.String("go.data.mqtt.password"),
 				Topics:   make([]string, 0),
 			}
-			conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
 			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 				logger.Error("connect mqtt broker failed, err: " + token.Error().Error())
 				return
@@ -94,7 +94,7 @@ func (m *mqtt) GetConnection(tag ...string) (*connection, error) {
 			return m.connections["0"], nil
 		} else {
 			conn := m.connections["0"]
-			conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
 			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 				logger.Error("reconnect mqtt broker failed, err: " + token.Error().Error())
 				return nil, token.Error()
@@ -114,7 +114,7 @@ func (m *mqtt) GetConnection(tag ...string) (*connection, error) {
 		return m.connections[tag[0]], nil
 	} else {
 		conn := m.connections[tag[0]]
-		conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+		conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
 		if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 			logger.Error("reconnect mqtt broker failed, tag: " + tag[0] + ", err: " + token.Error().Error())
 			return nil, token.Error()
@@ -151,7 +151,7 @@ func (m *mqtt) Check() error {
 		for tag, conn := range m.connections {
 			if !conn.Client.IsConnected() {
 				logger.Error("mqtt client not connected, tag: " + tag)
-				conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+				conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
 				if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 					logger.Error("reconnect mqtt broker failed, tag: " + tag + ", err: " + token.Error().Error())
 					err = token.Error()
@@ -163,7 +163,7 @@ func (m *mqtt) Check() error {
 		conn := m.connections["0"]
 		if !conn.Client.IsConnected() {
 			logger.Error("mqtt client not connected")
-			conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
 			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 				logger.Error("reconnect mqtt broker failed, err: " + token.Error().Error())
 				err = token.Error()
