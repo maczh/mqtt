@@ -12,10 +12,10 @@ import (
 )
 
 type mqtt struct {
-	configData  []byte
-	conf        *koanf.Koanf
-	client      paho.Client
-	Topics      []SubTopics
+	configData []byte
+	conf       *koanf.Koanf
+	client     paho.Client
+	// Topics      []SubTopics
 	multi       bool
 	tags        []string
 	connections map[string]*connection
@@ -27,13 +27,13 @@ type connection struct {
 	ClientId string
 	Username string
 	Password string
-	Topics   []string
+	Topics   []SubTopics
 }
 
 type SubTopics struct {
-	Topic           string
-	Qos             byte
-	HandlerFuncName string
+	Topic       string
+	Qos         byte
+	HandlerFunc *paho.MessageHandler
 }
 
 var MQTT = &mqtt{}
@@ -59,9 +59,9 @@ func (m *mqtt) Init(configData []byte) {
 					ClientId: m.conf.String("go.data.mqtt." + tag + ".clientId"),
 					Username: m.conf.String("go.data.mqtt." + tag + ".username"),
 					Password: m.conf.String("go.data.mqtt." + tag + ".password"),
-					Topics:   make([]string, 0),
+					Topics:   make([]SubTopics, 0),
 				}
-				conn.Client = paho.NewClient(paho.NewClientOptions().AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+				conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password).SetOnConnectHandler(conn.onConnectHandler))
 				if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 					logger.Error("connect mqtt broker failed, tag: " + tag + ", err: " + token.Error().Error())
 					continue
@@ -75,9 +75,9 @@ func (m *mqtt) Init(configData []byte) {
 				ClientId: m.conf.String("go.data.mqtt.clientId"),
 				Username: m.conf.String("go.data.mqtt.username"),
 				Password: m.conf.String("go.data.mqtt.password"),
-				Topics:   make([]string, 0),
+				Topics:   make([]SubTopics, 0),
 			}
-			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password).SetOnConnectHandler(conn.onConnectHandler))
 			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 				logger.Error("connect mqtt broker failed, err: " + token.Error().Error())
 				return
@@ -88,13 +88,27 @@ func (m *mqtt) Init(configData []byte) {
 	}
 }
 
+func (c *connection) onConnectHandler(client paho.Client) {
+	if len(c.Topics) > 0 {
+		logger.Info("重新连接成功，重新订阅主题...")
+		for _, topic := range c.Topics {
+			token := c.Client.Subscribe(topic.Topic, topic.Qos, safeHandler(*topic.HandlerFunc))
+			if token.Error() != nil {
+				logger.Error("subscribe topic failed, topic: " + topic.Topic + ", err: " + token.Error().Error())
+				return
+			}
+			token.Wait()
+		}
+	}
+}
+
 func (m *mqtt) GetConnection(tag ...string) (*connection, error) {
 	if !m.multi {
 		if m.connections["0"].Client.IsConnected() {
 			return m.connections["0"], nil
 		} else {
 			conn := m.connections["0"]
-			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password).SetOnConnectHandler(conn.onConnectHandler))
 			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 				logger.Error("reconnect mqtt broker failed, err: " + token.Error().Error())
 				return nil, token.Error()
@@ -114,7 +128,7 @@ func (m *mqtt) GetConnection(tag ...string) (*connection, error) {
 		return m.connections[tag[0]], nil
 	} else {
 		conn := m.connections[tag[0]]
-		conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+		conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password).SetOnConnectHandler(conn.onConnectHandler))
 		if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 			logger.Error("reconnect mqtt broker failed, tag: " + tag[0] + ", err: " + token.Error().Error())
 			return nil, token.Error()
@@ -128,7 +142,11 @@ func (m *mqtt) GetConnection(tag ...string) (*connection, error) {
 func (m *mqtt) Close() {
 	if !m.multi {
 		if len(m.connections["0"].Topics) > 0 {
-			m.connections["0"].Client.Unsubscribe(m.connections["0"].Topics...)
+			topics := make([]string, 0)
+			for _, topic := range m.connections["0"].Topics {
+				topics = append(topics, topic.Topic)
+			}
+			m.connections["0"].Client.Unsubscribe(topics...)
 		}
 		m.connections["0"].Client.Disconnect(0)
 		logger.Info("disconnect mqtt broker success, broker: " + m.connections["0"].Broker + ", clientId: " + m.connections["0"].ClientId)
@@ -136,7 +154,11 @@ func (m *mqtt) Close() {
 	} else {
 		for tag, _ := range m.connections {
 			if len(m.connections[tag].Topics) > 0 {
-				m.connections[tag].Client.Unsubscribe(m.connections[tag].Topics...)
+				topics := make([]string, 0)
+				for _, topic := range m.connections[tag].Topics {
+					topics = append(topics, topic.Topic)
+				}
+				m.connections[tag].Client.Unsubscribe(topics...)
 			}
 			m.connections[tag].Client.Disconnect(0)
 			logger.Info("disconnect mqtt broker success, tag: " + tag + ", broker: " + m.connections[tag].Broker + ", clientId: " + m.connections[tag].ClientId)
@@ -151,7 +173,7 @@ func (m *mqtt) Check() error {
 		for tag, conn := range m.connections {
 			if !conn.Client.IsConnected() {
 				logger.Error("mqtt client not connected, tag: " + tag)
-				conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+				conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password).SetOnConnectHandler(conn.onConnectHandler))
 				if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 					logger.Error("reconnect mqtt broker failed, tag: " + tag + ", err: " + token.Error().Error())
 					err = token.Error()
@@ -163,7 +185,7 @@ func (m *mqtt) Check() error {
 		conn := m.connections["0"]
 		if !conn.Client.IsConnected() {
 			logger.Error("mqtt client not connected")
-			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password))
+			conn.Client = paho.NewClient(paho.NewClientOptions().SetCleanSession(false).SetAutoReconnect(true).AddBroker(conn.Broker).SetClientID(conn.ClientId).SetUsername(conn.Username).SetPassword(conn.Password).SetOnConnectHandler(conn.onConnectHandler))
 			if token := conn.Client.Connect(); token.Wait() && token.Error() != nil {
 				logger.Error("reconnect mqtt broker failed, err: " + token.Error().Error())
 				err = token.Error()
@@ -198,7 +220,7 @@ func (m *mqtt) Subscribe(tag, topic string, qos byte, handlerFunc paho.MessageHa
 		return token.Error()
 	}
 	token.Wait()
-	m.connections[tag].Topics = append(m.connections[tag].Topics, topic)
+	m.connections[tag].Topics = append(m.connections[tag].Topics, SubTopics{Topic: topic, Qos: qos, HandlerFunc: &handlerFunc})
 	return nil
 }
 
@@ -215,7 +237,7 @@ func (m *mqtt) SubscribeMultiple(tag string, filters map[string]byte, callback p
 	}
 	token.Wait()
 	for topic, _ := range filters {
-		m.connections[tag].Topics = append(m.connections[tag].Topics, topic)
+		m.connections[tag].Topics = append(m.connections[tag].Topics, SubTopics{Topic: topic, Qos: filters[topic], HandlerFunc: &callback})
 	}
 	return nil
 }
