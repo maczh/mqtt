@@ -2,7 +2,9 @@ package mqtt
 
 import (
 	"errors"
+	"math/rand"
 	"strings"
+	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
 	"github.com/knadh/koanf"
@@ -56,7 +58,7 @@ func (m *mqtt) Init(configData []byte) {
 			for _, tag := range tags {
 				conn := &connection{
 					Broker:   m.conf.String("go.data.mqtt." + tag + ".broker"),
-					ClientId: m.conf.String("go.data.mqtt." + tag + ".clientId"),
+					ClientId: m.conf.String("go.data.mqtt."+tag+".clientId") + "-" + generateRandHexString(4),
 					Username: m.conf.String("go.data.mqtt." + tag + ".username"),
 					Password: m.conf.String("go.data.mqtt." + tag + ".password"),
 					Topics:   make([]SubTopics, 0),
@@ -72,7 +74,7 @@ func (m *mqtt) Init(configData []byte) {
 		} else {
 			conn := &connection{
 				Broker:   m.conf.String("go.data.mqtt.broker"),
-				ClientId: m.conf.String("go.data.mqtt.clientId"),
+				ClientId: m.conf.String("go.data.mqtt.clientId") + "-" + generateRandHexString(4),
 				Username: m.conf.String("go.data.mqtt.username"),
 				Password: m.conf.String("go.data.mqtt.password"),
 				Topics:   make([]SubTopics, 0),
@@ -269,4 +271,14 @@ func (m *mqtt) UnSubscribe(tag string, topics ...string) error {
 		return token.Error()
 	}
 	return nil
+}
+
+func generateRandHexString(sl int) string {
+	source := []byte("0123456789abcdef")
+	result := []byte{}
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for i := 0; i < sl; i++ {
+		result = append(result, source[r.Intn(len(source))])
+	}
+	return string(result)
 }
