@@ -220,6 +220,9 @@ func (m *mqtt) Subscribe(tag, topic string, qos byte, handlerFunc paho.MessageHa
 		return token.Error()
 	}
 	token.Wait()
+	if tag == "" {
+		tag = "0"
+	}
 	m.connections[tag].Topics = append(m.connections[tag].Topics, SubTopics{Topic: topic, Qos: qos, HandlerFunc: &handlerFunc})
 	return nil
 }
@@ -236,6 +239,9 @@ func (m *mqtt) SubscribeMultiple(tag string, filters map[string]byte, callback p
 		return token.Error()
 	}
 	token.Wait()
+	if tag == "" {
+		tag = "0"
+	}
 	for topic, _ := range filters {
 		m.connections[tag].Topics = append(m.connections[tag].Topics, SubTopics{Topic: topic, Qos: filters[topic], HandlerFunc: &callback})
 	}
